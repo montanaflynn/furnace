@@ -18,6 +18,7 @@
 #
 
 import ctypes
+import ctypes.util
 import logging
 from pathlib import Path
 
