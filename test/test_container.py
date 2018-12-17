@@ -25,6 +25,7 @@ import threading
 from pathlib import Path
 
 from furnace.context import ContainerContext
+from furnace.config import CONTAINER_BIND_MOUNTS
 from furnace.libc import is_mount_point
 from furnace.utils import BindMountContext, OverlayfsMountContext
 
@@ -144,15 +145,24 @@ def test_loop_mounts_work(rootfs_for_testing):
         # no assert, because the previous two commands would have thrown an Exception on error
 
 
-def test_using_container_does_not_touch_files(debootstrapped_dir, tmpdir_factory):
+def test_using_container_does_not_touch_files_except_bind_mounts(debootstrapped_dir, tmpdir_factory):
     overlay_workdir = Path(tmpdir_factory.mktemp('overlay_work'))
     overlay_rwdir = Path(tmpdir_factory.mktemp('overlay_rw'))
     overlay_mounted = Path(tmpdir_factory.mktemp('overlay_mount'))
     with OverlayfsMountContext([debootstrapped_dir], overlay_rwdir, overlay_workdir, overlay_mounted):
         with ContainerContext(overlay_mounted) as cnt:
             cnt.run(["/bin/ls", "/"], check=True)
-    modified_files = list(overlay_rwdir.iterdir())
-    assert len(modified_files) == 0, "No files should have been modified because of container run"
+
+    modified_files = set()
+    for modified_file in overlay_rwdir.glob('**/*'):
+        modified_files.add(modified_file.relative_to(overlay_rwdir))
+
+    bind_mounted_files = set()
+    for bind_mount in CONTAINER_BIND_MOUNTS:
+        bind_mounted_files.add(bind_mount.destination)
+        bind_mounted_files.update(set(list(bind_mount.destination.parents)[:-1]))
+
+    assert modified_files <= bind_mounted_files, "No files should have been modified except bind mounted files"
 
 
 class ThreadForTesting(threading.Thread):

@@ -16,7 +16,7 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with Furnace.  If not, see <http://www.gnu.org/licenses/>.
 #
-
+import contextlib
 import json
 import logging
 import os
@@ -27,9 +27,9 @@ from pathlib import Path
 from typing import Union
 
 from . import pid1
-from .config import NAMESPACES
+from .config import NAMESPACES, CONTAINER_BIND_MOUNTS
 from .libc import unshare, setns, CLONE_NEWPID
-from .utils import PathEncoder
+from .utils import PathEncoder, BindMountContext
 
 logger = logging.getLogger(__name__)
 
@@ -158,14 +158,34 @@ class ContainerContext:
         self.root_dir = root_dir.resolve()
         self.pid1 = ContainerPID1Manager(root_dir, isolate_networking=isolate_networking)
         self.setns_context = None
+        self.bind_mount_contexts = None
+
+    def create_target(self, source, destination):
+        if source.is_file():
+            if destination.is_symlink():
+                destination.unlink()
+            destination.touch()
+        else:
+            destination.mkdir(parents=True, exist_ok=True)
 
     def __enter__(self):
         self.pid1.start()
         self.setns_context = SetnsContext(self.pid1.pid)
+        self.bind_mount_contexts = contextlib.ExitStack()
+        for bind_mount in CONTAINER_BIND_MOUNTS:
+            self.create_target(bind_mount.source, self.root_dir.joinpath(bind_mount.destination))
+            self.bind_mount_contexts.enter_context(BindMountContext(
+                bind_mount.source,
+                self.root_dir.joinpath(bind_mount.destination),
+                bind_mount.readonly
+            ))
         return self
 
     def __exit__(self, type, value, traceback):
         self.setns_context = None
+        if self.bind_mount_contexts:
+            self.bind_mount_contexts.__exit__(type, value, traceback)
+            self.bind_mount_contexts = None
         self.pid1.kill()
         return False
 
